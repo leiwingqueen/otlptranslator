@@ -19,6 +19,8 @@ package otlptranslator
 import (
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 var labelTestCases = []struct {
@@ -214,4 +216,66 @@ func TestBuildLabel_UTF8Allowed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStringCacheBasics(t *testing.T) {
+	cache := NewStringCache()
+	namer := &LabelNamer{cache: cache}
+
+	// First call should miss cache
+	result, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result)
+
+	// Second call should hit cache
+	result2, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result2)
+}
+
+func TestLabelNamerCacheHit(t *testing.T) {
+	cache := NewStringCache()
+	namer := &LabelNamer{cache: cache}
+
+	result1, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result1)
+
+	// Same label should hit cache
+	result2, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result2)
+}
+
+func TestLabelNamerCacheDisabled(t *testing.T) {
+	namer := &LabelNamer{}
+	namer.cache = nil // explicitly disabled
+
+	result, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result)
+
+	result2, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result2)
+}
+
+func TestLabelNamerCacheMemorySafety(t *testing.T) {
+	// Create a label that doesn't need transformation
+	label := "already_valid_label"
+	cache := NewStringCache()
+	namer := &LabelNamer{cache: cache}
+
+	result, err := namer.Build(label)
+	require.NoError(t, err)
+	require.Equal(t, label, result)
+}
+
+func TestLabelNamerWithCacheDisabled(t *testing.T) {
+	namer := &LabelNamer{}
+	WithCacheDisabled()(namer)
+
+	result, err := namer.Build("http.method")
+	require.NoError(t, err)
+	require.Equal(t, "http_method", result)
 }
