@@ -55,11 +55,31 @@ type LabelNamer struct {
 	PreserveMultipleUnderscores bool
 	// CacheDisabled specifies whether to disable the transformation cache.
 	// Defaults to false (cache enabled). Set to true to disable caching.
+	// The cache is bound to the options in effect on the first Build call that
+	// uses it. If the options are changed afterwards, Build still returns
+	// correct results but no longer uses the cache.
 	CacheDisabled bool
 	// once ensures thread-safe lazy initialization of cache.
 	once sync.Once
 	// cache is lazily initialized when CacheDisabled is false.
 	cache *StringCache
+	// cacheOpts records the options in effect when cache was initialized.
+	// Cached results are only valid for these options.
+	cacheOpts labelNamerOptions
+}
+
+// labelNamerOptions holds the LabelNamer options that affect Build results
+// on the cached path.
+type labelNamerOptions struct {
+	preserveMultipleUnderscores bool
+	underscoreLabelSanitization bool
+}
+
+func (ln *LabelNamer) options() labelNamerOptions {
+	return labelNamerOptions{
+		preserveMultipleUnderscores: ln.PreserveMultipleUnderscores,
+		underscoreLabelSanitization: ln.UnderscoreLabelSanitization,
+	}
 }
 
 // Build normalizes the specified label to follow Prometheus label names standard.
@@ -97,12 +117,21 @@ func (ln *LabelNamer) Build(label string) (string, error) {
 	if !ln.CacheDisabled {
 		ln.once.Do(func() {
 			ln.cache = NewStringCache()
+			ln.cacheOpts = ln.options()
 		})
 	}
 
+	// Bypass the cache if the options changed since it was initialized, for
+	// example when a field was modified or the LabelNamer was copied, since the
+	// cached results were computed under different options.
+	cache := ln.cache
+	if cache != nil && ln.cacheOpts != ln.options() {
+		cache = nil
+	}
+
 	// Try cache first
-	if ln.cache != nil {
-		if v, ok := ln.cache.m.Load(label); ok {
+	if cache != nil {
+		if v, ok := cache.m.Load(label); ok {
 			e := v.(*cacheEntry)
 			ct := uint64(time.Now().Unix())
 			if e.lastAccessTime.Load()+10 < ct {
@@ -119,7 +148,7 @@ func (ln *LabelNamer) Build(label string) (string, error) {
 	}
 
 	// Store in cache with memory safety
-	if ln.cache != nil {
+	if cache != nil {
 		label = strings.Clone(label)
 		if result == label {
 			result = label
@@ -128,16 +157,16 @@ func (ln *LabelNamer) Build(label string) (string, error) {
 			value: result,
 		}
 		e.lastAccessTime.Store(uint64(time.Now().Unix()))
-		ln.cache.m.Store(label, e)
+		cache.m.Store(label, e)
 
 		// Lazy cleanup
 		ct := uint64(time.Now().Unix())
-		if needCleanup(&ln.cache.lastCleanupTime, ct) {
-			deadline := ct - uint64(ln.cache.expireDuration.Seconds())
-			ln.cache.m.Range(func(k, v any) bool {
+		if needCleanup(&cache.lastCleanupTime, ct) {
+			deadline := ct - uint64(cache.expireDuration.Seconds())
+			cache.m.Range(func(k, v any) bool {
 				e := v.(*cacheEntry)
 				if e.lastAccessTime.Load() < deadline {
-					ln.cache.m.Delete(k)
+					cache.m.Delete(k)
 				}
 				return true
 			})

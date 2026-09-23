@@ -364,3 +364,73 @@ func TestLabelNamerCacheEnabledDefault(t *testing.T) {
 		t.Errorf("expected http_method, got %s", result2)
 	}
 }
+
+// TestLabelNamerCacheOptionsChanged verifies that results cached under one set
+// of options are not returned after the options change.
+func TestLabelNamerCacheOptionsChanged(t *testing.T) {
+	tests := []struct {
+		name     string
+		preserve bool
+		sanitize bool
+		label    string
+		change   func(*LabelNamer)
+		initial  string
+		changed  string
+	}{
+		{
+			name:    "enable PreserveMultipleUnderscores",
+			label:   "http..method",
+			change:  func(ln *LabelNamer) { ln.PreserveMultipleUnderscores = true },
+			initial: "http_method",
+			changed: "http__method",
+		},
+		{
+			name:     "disable PreserveMultipleUnderscores",
+			preserve: true,
+			label:    "http..method",
+			change:   func(ln *LabelNamer) { ln.PreserveMultipleUnderscores = false },
+			initial:  "http__method",
+			changed:  "http_method",
+		},
+		{
+			name:    "enable UnderscoreLabelSanitization",
+			label:   "_http.method",
+			change:  func(ln *LabelNamer) { ln.UnderscoreLabelSanitization = true },
+			initial: "_http_method",
+			changed: "key_http_method",
+		},
+		{
+			name:     "disable UnderscoreLabelSanitization",
+			sanitize: true,
+			label:    "_http.method",
+			change:   func(ln *LabelNamer) { ln.UnderscoreLabelSanitization = false },
+			initial:  "key_http_method",
+			changed:  "_http_method",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			namer := &LabelNamer{
+				PreserveMultipleUnderscores: tt.preserve,
+				UnderscoreLabelSanitization: tt.sanitize,
+			}
+
+			got, err := namer.Build(tt.label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.initial {
+				t.Fatalf("Build(%q) = %q before change, want %q", tt.label, got, tt.initial)
+			}
+
+			tt.change(namer)
+			got, err = namer.Build(tt.label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.changed {
+				t.Errorf("Build(%q) = %q after change, want %q", tt.label, got, tt.changed)
+			}
+		})
+	}
+}
